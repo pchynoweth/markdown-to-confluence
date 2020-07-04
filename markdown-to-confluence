@@ -7,7 +7,6 @@ import requests
 import git
 import sys
 
-from getpass import getpass
 from markdown_to_confluence.confluence import Confluence
 from markdown_to_confluence.convert import convtoconf, parse
 """Deploys Markdown posts to Confluenceo
@@ -90,7 +89,7 @@ def parse_args():
     parser.add_argument(
         '--password',
         dest='password',
-        default=None,
+        default=os.getenv('CONFLUENCE_PASSWORD'),
         help=
         'The password for authentication to Confluence (default: env(\'CONFLUENCE_PASSWORD\'))'
     )
@@ -137,9 +136,21 @@ def parse_args():
         help='Upload pages without checking for changes'
     )
     parser.add_argument(
+        '--save-cookie',
+        dest='save_cookie',
+        default=None,
+        help='File to write cookie'
+    )
+    parser.add_argument(
+        '--cookie-file',
+        dest='cookie',
+        default=None,
+        help='Instead of using a user name and password use a cookie created with --save-cookie'
+    )
+    parser.add_argument(
         'posts',
         type=str,
-        nargs='+',
+        nargs='*',
         help=
         'Individual files to deploy to Confluence'
     )
@@ -235,14 +246,20 @@ class Page():
 def main():
     args = parse_args()
 
-    if args.password is None:
-        args.password = getpass()
-
     confluence = Confluence(api_url=args.api_url,
                             username=args.username,
                             password=args.password,
+                            cookie=args.cookie,
                             headers=args.headers,
                             dry_run=args.dry_run)
+
+    if args.save_cookie:
+        log.info('Attempting to save cookie.  Input files will be ignored')
+        if confluence.save_cookie(args.save_cookie):
+            log.info(f'Cookie saved successfully to {args.save_cookie}')
+        else:
+            log.error(f'Failed to save cookie {args.save_cookie}')
+        return
 
     if args.posts:
         changed_posts = [os.path.abspath(post) for post in args.posts]
