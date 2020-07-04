@@ -7,6 +7,7 @@ import requests
 import git
 import sys
 
+from getpass import getpass
 from markdown_to_confluence.confluence import Confluence
 from markdown_to_confluence.convert import convtoconf, parse
 """Deploys Markdown posts to Confluenceo
@@ -89,7 +90,7 @@ def parse_args():
     parser.add_argument(
         '--password',
         dest='password',
-        default=os.getenv('CONFLUENCE_PASSWORD'),
+        default=None,
         help=
         'The password for authentication to Confluence (default: env(\'CONFLUENCE_PASSWORD\'))'
     )
@@ -233,6 +234,9 @@ class Page():
 
 def main():
     args = parse_args()
+
+    if args.password is None:
+        args.password = getpass()
 
     confluence = Confluence(api_url=args.api_url,
                             username=args.username,
