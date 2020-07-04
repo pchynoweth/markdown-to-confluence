@@ -32,7 +32,7 @@ class Confluence():
                  dry_run=False,
                  _client=None):
         """Creates a new Confluence API client.
-        
+
         Arguments:
             api_url {str} -- The URL to the Confluence API root (e.g. https://wiki.example.com/api/rest/)
             username {str} -- The Confluence service account username
@@ -64,7 +64,7 @@ class Confluence():
 
     def _require_kwargs(self, kwargs):
         """Ensures that certain kwargs have been provided
-        
+
         Arguments:
             kwargs {dict} -- The dict of required kwargs
         """
@@ -143,23 +143,23 @@ class Confluence():
     def put(self, path=None, params=None, data=None):
         return self._request(method='PUT', path=path, params=params, data=data)
 
-    def exists(self, space=None, slug=None, ancestor_id=None):
+    def exists(self, space=None, title=None, ancestor_id=None):
         """Returns the Confluence page that matches the provided metdata, if it exists.
 
         Specifically, this leverages a Confluence Query Language (CQL) query
         against the Confluence API. We assume that each slug is unique, at
         least to the provided space/ancestor_id.
-        
+
         Arguments:
             space {str} -- The Confluence space to use for filtering posts
             slug {str} -- The page slug
             ancestor_id {str} -- The ID of the parent page
         """
-        self._require_kwargs({'slug': slug})
+        self._require_kwargs({'title': title})
 
         cql_args = []
-        if slug:
-            cql_args.append('label={}'.format(slug))
+        if title:
+            cql_args.append(f'title="{title}"')
         if ancestor_id:
             cql_args.append('ancestor={}'.format(ancestor_id))
         if space:
@@ -171,22 +171,33 @@ class Confluence():
         response = self.get(path='content/search', params=params)
         if not response.get('size'):
             return None
-        return response['results'][0]
+        ret = [ r for r in response['results'] if r['type'] == 'page' and r['title'] == title ]
+        assert(len(ret) == 1)
+        return ret[0]
 
-    def create_labels(self, page_id=None, slug=None, tags=[]):
+    def get_page_content(self, id):
+        """Returns the content of the Confluence page that matches the provided metdata, if it exists.
+
+        Arguments:
+            id {str} -- The ID of the page
+        """
+        response = self.get(path=f'content/{id}', params={ 'expand': 'body.storage' })
+        return response.get('body')['storage']['value']
+
+    def create_labels(self, page_id=None, tags=[]):
         """Creates labels for the page to both assist with searching as well
         as categorization.
 
         We specifically require a slug to be provided, since this is how we
         determine if a page exists. Any other tags are optional.
-        
+
         Keyword Arguments:
             page_id {str} -- The ID of the existing page to which the label should apply
             slug {str} -- The page slug to use as the label value
             tags {list(str)} -- Any other tags to apply to the post
         """
-        labels = [{'prefix': DEFAULT_LABEL_PREFIX, 'name': slug}]
 
+        labels = []
         if tags is None:
             tags = []
         for tag in tags:
@@ -200,19 +211,13 @@ class Confluence():
         if not labels:
             log.error(
                 'No labels found after attempting to update page {}'.format(
-                    slug))
+                    page_id))
             log.error('Here\'s the response we got:\n{}'.format(response))
             return labels
 
-        if not any(label['name'] == slug for label in labels):
-            log.error(
-                'Returned labels missing the expected slug: {}'.format(slug))
-            log.error('Here are the labels we got: {}'.format(labels))
-            return labels
-
         log.info(
-            'Created the following labels for page {slug}: {labels}'.format(
-                slug=slug,
+            'Created the following labels for page {page_id}: {labels}'.format(
+                page_id=page_id,
                 labels=', '.join(label['name'] for label in labels)))
         return labels
 
@@ -223,7 +228,7 @@ class Confluence():
                              attachments=None,
                              space=None,
                              type='page'):
-        return {
+        ret = {
             'type': type,
             'title': title,
             'space': {
@@ -234,15 +239,17 @@ class Confluence():
                     'representation': 'storage',
                     'value': content
                 }
-            },
-            'ancestors': [{
+            }
+        }
+        if ancestor_id:
+            ret['ancestors'] = [{
                 'id': str(ancestor_id)
             }]
-        }
+        return ret
 
     def get_attachments(self, post_id):
         """Gets the attachments for a particular Confluence post
-        
+
         Arguments:
             post_id {str} -- The Confluence post ID
         """
@@ -251,7 +258,7 @@ class Confluence():
 
     def upload_attachment(self, post_id=None, attachment_path=None):
         """Uploads an attachment to a Confluence post
-        
+
         Keyword Arguments:
             post_id {str} -- The Confluence post ID
             attachment_path {str} -- The absolute path to the attachment
@@ -263,9 +270,10 @@ class Confluence():
         log.info(
             'Uploading attachment {attachment_path} to post {post_id}'.format(
                 attachment_path=attachment_path, post_id=post_id))
-        self.post(path=path,
-                  params={'allowDuplicated': 'true'},
-                  files={'file': open(attachment_path, 'rb')})
+        if not self.dry_run:
+            self.post(path=path,
+                    params={'allowDuplicated': 'true'},
+                    files={'file': open(attachment_path, 'rb')})
         log.info('Uploaded {} to post ID {}'.format(attachment_path, post_id))
 
     def get_author(self, username):
@@ -295,7 +303,7 @@ class Confluence():
 
         If an ancestor_id is specified, then the page will be created as a
         child of that ancestor page.
-        
+
         Keyword Arguments:
             content {str} -- The HTML content to upload (required)
             space {str} -- The Confluence space where the page should reside
@@ -353,7 +361,7 @@ class Confluence():
 
         This involves updating the attachments stored on Confluence, uploading
         the page content, and finally updating the labels.
-        
+
         Keyword Arguments:
             post_id {str} -- The ID of the Confluence post
             content {str} -- The page represented in Confluence storage format
@@ -396,12 +404,14 @@ class Confluence():
         # we can upload the final content up to Confluence.
         path = 'content/{}'.format(page['id'])
         response = self.put(path=path, data=new_page)
-        print(response)
 
-        page_url = urljoin(self.api_url, response['_links']['webui'])
+        page_url = '(dry run)' if self.dry_run else urljoin(self.api_url, response['_links']['webui'])
 
-        # Finally, we can update the labels on the page
-        self.create_labels(page_id=post_id, slug=slug, tags=tags)
+        if tags:
+            # Finally, we can update the labels on the page
+            self.create_labels(page_id=post_id, tags=tags)
 
         log.info('Page "{title}" (id {page_id}) updated successfully at {url}'.
                  format(title=title, page_id=post_id, url=page_url))
+
+        return post_id
